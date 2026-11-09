@@ -1,12 +1,6 @@
 // ==UserScript==
 // @name         GeoFS Living World Addon
-// @namespace    https://github.com/MVX-star/GeoFS-Living-World-Addon
-// @author       SkyTeamDelta
-// @license      MIT
-// @homepageURL  https://github.com/MVX-star/GeoFS-Living-World-Addon
-// @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
-// @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
-// @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
+// @namespace    https://github.com/geofs-traffic
 // @version      0.23.0
 // @description  GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
