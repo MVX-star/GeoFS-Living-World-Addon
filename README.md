@@ -16,7 +16,7 @@
 
 From cars traveling along real-world road networks to trains moving across railway systems and boats navigating waterways, Living World adds movement and activity to the landscapes around you.
 
-![Freight train and road traffic](screenshots/traffic-day.png)
+![Freight train and road traffic](traffic-day.png.png)
 
 ## Features
 
@@ -35,9 +35,9 @@ From cars traveling along real-world road networks to trains moving across railw
 
 | Night traffic | Ferry | Cruise ship at night |
 |:---:|:---:|:---:|
-| ![Night traffic](screenshots/traffic-night.png) | ![Ferry](screenshots/ferry.png) | ![Cruise ship at night](screenshots/cruise-night.png) |
+| ![Night traffic](traffic-night.png.png) | ![Ferry](ferry.png.png) | ![Cruise ship at night](cruise-night.png.png) |
 
-![Train in the port](screenshots/train-port.png)
+![Train in the port](train-port.png.png)
 
 ## Installation
 
