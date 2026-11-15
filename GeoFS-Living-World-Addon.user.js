@@ -1,8 +1,14 @@
 // ==UserScript==
 // @name         GeoFS Living World Addon
-// @namespace    https://github.com/geofs-traffic
-// @version      0.23.0
-// @description  GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
+// @namespace    https://github.com/MVX-star/GeoFS-Living-World-Addon
+// @author       SkyTeamDelta
+// @license      MIT
+// @homepageURL  https://github.com/MVX-star/GeoFS-Living-World-Addon
+// @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
+// @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
+// @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
+// @version      0.26.2
+// @description  (Beta) GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -19,16 +25,14 @@
 (function () {
   'use strict';
 
-  /* ------------------------------------------------------------------ *
-   *  SETTINGS
-   * ------------------------------------------------------------------ */
+  // Settings
   const DEFAULTS = {
     enabled: true,
     radiusUnl: false,   // unlimited car radius (really UNL_KM)
     radiusKm: 5,        // cars only exist inside this radius around you; everything outside is removed
     maxCars: 3000,      // cars simulated (all inside the car radius, so a small radius = a dense, lively area)
     detail: 'regular',   // model detail: low / regular / high
-    mode: 'manual',      // 'manual' = you set the sliders, 'auto' = Auto-Configure picks them for where you are
+    mode: 'auto',        // 'manual' = you set the sliders, 'auto' = Auto-Configure picks them for where you are
     source: 'auto',     // where roads and rails come from: 'auto' = fast map tiles with Overpass as backup, 'overpass' = Overpass only
     rare: true,          // rare vehicles: supercars, cruise ships and famous trains
     rareCars: true, rareTrains: true, rareShips: true,
@@ -40,7 +44,8 @@
     localRoads: true,   // include residential/unclassified roads (lots more places for cars to be)
     localRadiusKm: 5,   // local streets only load this close to you
     lights: 'auto',     // 'auto' | 'on' | 'off'
-    farDots: true,      // cars that are inside the radius but too many to draw as models show as small coloured dots
+    farSize: true,       // distant vehicles are drawn a little bigger so they stay visible (a car 3 km away is only ~2 pixels)
+    farDots: false,      // cars that are inside the radius but too many to draw as models show as small coloured dots
     maxDots: 4000,
     trains: true,       // trains on real railways
     maxTrains: 25,      // trains running at once (each is several cars long)
@@ -51,12 +56,12 @@
     nightDark: 85,      // how dark vehicles get at night, in % (GeoFS darkens everything else at night too)
     lightFx: true,      // glowing 3D headlight / taillight beams at night
     bloom: false,       // experimental screen glow (affects the whole view)
-    v: 9                // settings version (bumped when defaults change)
+    v: 10               // settings version (bumped when defaults change)
   };
   function loadCfg() {
     try {
       const saved = JSON.parse(localStorage.getItem('gftraffic') || '{}');
-      if (saved.v !== 9) { if (!(saved.v >= 4)) delete saved.maxCars; delete saved.groundMode; delete saved.nearModelM; if (!(saved.v >= 6)) delete saved.radiusKm; if (!(saved.v >= 7)) { delete saved.localRoads; delete saved.localRadiusKm; if (saved.maxCars < 3000) delete saved.maxCars; } if (!(saved.v >= 8)) delete saved.nightDark; if (!(saved.v >= 9)) delete saved.rareHl; saved.v = 9; }   // adopt new defaults
+      if (saved.v !== 10) { if (!(saved.v >= 4)) delete saved.maxCars; delete saved.groundMode; delete saved.nearModelM; if (!(saved.v >= 6)) delete saved.radiusKm; if (!(saved.v >= 7)) { delete saved.localRoads; delete saved.localRadiusKm; if (saved.maxCars < 3000) delete saved.maxCars; } if (!(saved.v >= 8)) delete saved.nightDark; if (!(saved.v >= 9)) delete saved.rareHl; if (!(saved.v >= 10)) { delete saved.farDots; delete saved.mode; } saved.v = 10; }   // adopt new defaults
       return saved;
     } catch (e) { return {}; }
   }
@@ -89,7 +94,6 @@
     'https://overpass.private.coffee/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
-  // (sizes of the 3D model pools are set with the vehicle models below)
   const D2R = Math.PI / 180;
 
   const ROAD_SPEED = { motorway: 29, trunk: 25, primary: 20, secondary: 16, tertiary: 13, unclassified: 11, residential: 9, living_street: 5 };
@@ -100,9 +104,7 @@
   const KIND_WEIGHT = { rail: 4, light_rail: 2, subway: 2, tram: 1.5, narrow_gauge: 1, ferry: 3, fairway: 4, river: 1 };
   const PAINT = ['#f2f2f2', '#1b1b1b', '#9aa0a6', '#b3202a', '#1f4e9c', '#2e6b3a', '#d9b43c'];
 
-  /* ------------------------------------------------------------------ *
-   *  SMALL MATH HELPERS
-   * ------------------------------------------------------------------ */
+  // Math helpers
   function distM(lat1, lon1, lat2, lon2) {
     const x = (lon2 - lon1) * Math.cos((lat1 + lat2) * 0.5 * D2R);
     const y = lat2 - lat1;
@@ -124,9 +126,7 @@
     return Math.asin(Math.sin(lat * D2R) * Math.sin(dec) + Math.cos(lat * D2R) * Math.cos(dec) * Math.cos(ha));
   }
 
-  /* ------------------------------------------------------------------ *
-   *  WAIT FOR GEOFS
-   * ------------------------------------------------------------------ */
+  // Waiting for GeoFS
   // Tampermonkey can run scripts in a sandbox; unsafeWindow is the real page, where GeoFS lives.
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
 
@@ -161,7 +161,7 @@
   }
 
   waitForGeoFS(function () {
-    const geofs = W.geofs, Cesium = W.Cesium;   // always the page's own objects
+    const geofs = W.geofs, Cesium = W.Cesium;
     const viewer = geofs.api.viewer;
 
     function playerPos() {
@@ -169,9 +169,7 @@
       return { lat: p[0], lon: p[1] };
     }
 
-    /* ---------------------------------------------------------------- *
-     *  ROAD DATA (Overpass tiles)
-     * ---------------------------------------------------------------- */
+    // Road data (Overpass tiles)
     // how long things took since you last jumped somewhere new (shown in Advanced, helps find what is slow)
     const JUMP = { pos: null, t0: Date.now(), tile: null, car: null, all: null, ground: null };
     const tiles = new Map();      // key -> {key, layer, size, ix, iy, state, ways, retries, ...}
@@ -198,7 +196,7 @@
     const NET_GAP_MS = 300;       // minimum gap between starting two network requests
     const CACHE_TTL = 14 * 86400000;
     let inflight = 0;
-    let busy = false;             // true while any network request is running
+    let busy = false;
     let lastMsg = 'no result yet';  // outcome of the most recent request (stays on screen)
     let reqHost = '';               // server of the latest request
     let nextFetchAt = 0;
@@ -213,18 +211,24 @@
 
     function tileKey(layer, ix, iy) { return layer + ':' + ix + ',' + iy; }
     function tileCenter(t) { return t.c || { lat: (t.iy + 0.5) * t.size, lon: (t.ix + 0.5) * t.size }; }
+    // How far each kind of vehicle exists around you. Cars use the radius setting; trains are long and boats are huge, so they are
+    // seen from much farther and get a bigger reach (capped, so Unlimited radius does not pull in half a continent of water).
+    const REACH = { road: 1, rail: 1.6, boat: 2.5 };
+    const REACH_CAP_M = { road: 1e9, rail: 20000, boat: 30000 };
+    function reachOf(kind, baseM) { return kind === 'road' ? baseM : Math.min(baseM * REACH[kind], Math.max(baseM, REACH_CAP_M[kind])); }
+    function reachM(kind) { return reachOf(kind, cfg.radiusKm * 1000); }
     function layerRadiusM(layer) {
-      if (layer === 'water') return (cfg.boats || cfg.mode === 'auto') ? cfg.radiusKm * 1000 : -1;
+      if (layer === 'water') return (cfg.boats || cfg.mode === 'auto') ? reachM('boat') : -1;
       const vec = layer.charAt(0) === 'v';
       if (vec !== useVec()) return -1;                       // only one source feeds roads and rails at a time
       const base = vec ? layer.slice(1) : layer;
       if (base === 'main') return cfg.radiusKm * 1000;
       if (base === 'near') return Math.min(3500, cfg.radiusKm * 1000);
-      if (base === 'rail') return (cfg.trains || cfg.mode === 'auto') ? cfg.radiusKm * 1000 : -1;
+      if (base === 'rail') return (cfg.trains || cfg.mode === 'auto') ? reachM('rail') : -1;
       return cfg.localRoads ? Math.min(cfg.localRadiusKm, cfg.radiusKm) * 1000 : -1;
     }
 
-    // ---- persistent tile cache (IndexedDB): revisiting an area loads instantly ----
+    // Persistent tile cache (IndexedDB): revisiting an area loads instantly
     let idb = null, idbReady = false;
     try {
       const rq = indexedDB.open('gftraffic2', 1);
@@ -277,7 +281,7 @@
       // watchdog: a request that never answered
       tiles.forEach(function (t) {
         if (t.vec) { if (t.state === 'loading' && now - t.startedAt > 90000) t.state = 'queued'; }
-        else if (t.state === 'loading' && now - t.startedAt > 70000) { lastMsg = 'request hung 70s'; fail(t); }
+        else if (t.state === 'loading' && now - t.startedAt > 35000) { lastMsg = 'request hung 35s'; fail(t); }
         if (t.state === 'failed' && now - t.failedAt > 60000) { t.state = 'queued'; t.retries = 0; }  // try again later
       });
       const p = playerPos();
@@ -461,13 +465,11 @@
       return out;
     }
 
-    /* ---------------------------------------------------------------- *
-     *  FAST MAP TILES (OpenFreeMap vector tiles: OpenStreetMap data cut into ready-made tiles)
-     *  A tile is a small file on a CDN, so it loads in a fraction of a second. Overpass (which has to
-     *  search the whole OpenStreetMap database for every request) stays as the backup.
-     * ---------------------------------------------------------------- */
+    // Fast map tiles (OpenFreeMap vector tiles: OpenStreetMap data cut into ready-made tiles)
+    // A tile is a small file on a CDN, so it loads in a fraction of a second. Overpass (which has to
+    // search the whole OpenStreetMap database for every request) stays as the backup.
     // MVT-BEGIN
-    // --- a small reader for Mapbox Vector Tiles (protobuf): only what road / rail data needs ---
+    // A small reader for Mapbox Vector Tiles (protobuf): only what road / rail data needs
     function mvtVarint(buf, st) {
       let r = 0, m = 1, b;
       do { b = buf[st.p++]; r += (b & 127) * m; m *= 128; } while ((b & 128) && st.p < buf.length);
@@ -574,7 +576,7 @@
       return out;
     }
 
-    // --- tile -> roads and rails ---
+    // Tile -> roads and rails
     const VEC_MAIN = { motorway: 1, trunk: 1, primary: 1, secondary: 1, tertiary: 1 };
     // node ids have to match where roads meet, and the tiles carry none: use the (rounded) position instead
     function vecNodeId(lat, lon) { return 1e15 + Math.round((lat + 90) * 1e5) * 4e7 + Math.round((lon + 180) * 1e5); }
@@ -704,7 +706,7 @@
     }
     // MVT-END
 
-    // ---- fast tile loading and the fallback to Overpass ----
+    // Fast tile loading and the fallback to Overpass
     const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
     const VEC = { state: 'init', tpl: null, z: 14, fails: 0, ok: 0, empty: 0, downUntil: 0, probing: false, note: '' };
     // state: init = looking up the tile address, ok = working, down = not working (Overpass is used instead)
@@ -852,7 +854,7 @@
       let active = 0;
       vecData.forEach(function (e, k) {
         if (e.st !== 'loading') { if (now - e.t > 180000) vecData.delete(k); return; }
-        if (now - e.t > 40000) { vecFailEntry(k, e, 'tile request hung'); return; }
+        if (now - e.t > 25000) { vecFailEntry(k, e, 'tile request hung'); return; }
         active++;
       });
       const p = playerPos();
@@ -911,10 +913,10 @@
 
     function evictTiles() {
       const p = playerPos();
-      const limit = cfg.radiusKm * 1000 * 2.2 + 5000;
       const dead = [];
       tiles.forEach(function (t, key) {
         const c = tileCenter(t);
+        const kk = layerKindOf(t.layer), limit = reachM(kk) * (kk === 'road' ? 2.2 : 1.3) + 5000;     // boat and rail tiles are kept for their larger reach
         if (t.state !== 'loading' && distM(p.lat, p.lon, c.lat, c.lon) > limit) dead.push(key);
       });
       if (dead.length) removeTiles(new Set(dead));
@@ -962,7 +964,7 @@
     let lastPoolBuild = 0;
     function rebuildPool() {
       const p = playerPos();
-      const r = cfg.radiusKm * 1000 * 0.95;
+      const rK = { road: reachM('road') * 0.95, rail: reachM('rail') * 0.95, boat: reachM('boat') * 0.95 };
       Object.keys(PK).forEach(function (k) { PK[k] = { pool: [], total: 0, tw: {} }; });
       lastPoolBuild = Date.now();
       tiles.forEach(function (t) {
@@ -970,11 +972,11 @@
           const w = t.ways[k];
           const m = w.pts[w.pts.length >> 1];
           const dm = distM(p.lat, p.lon, m[0], m[1]);
-          if (dm > r) continue;
+          if (dm > rK[w.kind]) continue;
           if (terrainOK && !w.th && !w.tunnel && dm > 3000) continue;   // far away and not measured yet: it would stay invisible
           const P = PK[w.kind];
           // ways near you get more traffic (about 3x at your feet, fading with distance)
-          const wt = (ROAD_WEIGHT[w.cls] || KIND_WEIGHT[w.cls] || 1) * Math.min(w.len, 2000) * (1 + 2 / (1 + dm / 3000)) * (w.tunnel ? 0.2 : 1);   // tunnels hide their cars
+          const wt = (ROAD_WEIGHT[w.cls] || KIND_WEIGHT[w.cls] || 1) * Math.min(w.len, 2000) * (1 + 2 / (1 + dm / 3000)) * (w.tunnel ? 0.2 : 1);
           P.total += wt;
           P.pool.push({ way: w, cum: P.total });
           P.tw[w.tile] = (P.tw[w.tile] || 0) + wt;
@@ -992,9 +994,7 @@
       return P.pool[lo].way;
     }
 
-    /* ---------------------------------------------------------------- *
-     *  CARS
-     * ---------------------------------------------------------------- */
+    // Cars
     const cars = [];
     let carId = 0;
     const lightPoints = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
@@ -1005,7 +1005,7 @@
     const scratchA = new Cesium.Cartesian3();
     const scratchB = new Cesium.Cartesian3();
     const scratchC = new Cesium.Cartesian3();
-    // ---- Vehicle types: each is built from simple boxes (no interiors, no logos) ----
+    // Vehicle types: each is built from simple boxes (no interiors, no logos)
     // Axes: +x = forward, y = left, z = up, origin on the ground at the vehicle's middle.
     // Colour kinds: p paint, g glass, t tyre, l light grey (cargo), d dark grey, h headlight, r taillight, s hubcap
     // lod: 'f' = only in the full-detail model, 'm' = only in the simplified model (about the look you
@@ -1092,12 +1092,21 @@
       return out.concat(wheelSet(p.wr, p.wt, p.wx, p.W));
     }
 
-    // most real cars are white, black, grey / silver, red or blue; the odd colour is mixed in
-    const PAL_CAR = ['#f2f2f2', '#f2f2f2', '#f2f2f2', '#f2f2f2', '#f2f2f2', '#1b1b1b', '#1b1b1b', '#1b1b1b', '#1b1b1b', '#1b1b1b',
-      '#9aa0a6', '#9aa0a6', '#9aa0a6', '#c8ccd2', '#c8ccd2', '#b3202a', '#b3202a', '#1f4e9c', '#1f4e9c',
-      '#2e6b3a', '#d9b43c', '#6b4b2a', '#7a1f5c'];
+    // Real traffic is mostly white, black, grey and silver, with some red and blue and only a few odd colours.
+    // The palettes are built from weights (about 100 entries) so the mix is easy to tune.
+    function weighted(list) {
+      const out = [];
+      list.forEach(function (e) { for (let i = 0; i < e[1]; i++) out.push(e[0]); });
+      return out;
+    }
+    const PAL_CAR = weighted([
+      ['#f2f2f2', 27], ['#1b1b1b', 25], ['#9aa0a6', 14], ['#c8ccd2', 11], ['#4a4f57', 4],   // white, black, grey, silver, charcoal
+      ['#b3202a', 5], ['#1f4e9c', 5], ['#14233f', 2], ['#6e1a22', 1],                       // red, blue, navy, maroon
+      ['#d8cfb8', 2], ['#6b4b2a', 1], ['#2e6b3a', 1], ['#d9b43c', 1], ['#e8731a', 1]]);     // beige, brown, green, gold, orange
     const PAL_SPORT = ['#d62828', '#f77f00', '#fcbf49', '#1f4e9c', '#f2f2f2', '#2a9d8f'];
-    const PAL_WORK = ['#f2f2f2', '#f2f2f2', '#f2f2f2', '#f2f2f2', '#e0e3e8', '#e0e3e8', '#9aa0a6', '#9aa0a6', '#1b1b1b', '#1f4e9c', '#b3202a', '#2e6b3a'];
+    const PAL_WORK = weighted([
+      ['#f2f2f2', 45], ['#e0e3e8', 12], ['#9aa0a6', 12], ['#1b1b1b', 12],
+      ['#1f4e9c', 6], ['#b3202a', 6], ['#2e6b3a', 3], ['#f2c200', 2], ['#e8731a', 2]]);
     const PAL_BUS = ['#f2c200', '#e8e8e8', '#2b5aa8', '#c8c8c8'];
 
     // L/W/H = overall size in metres (used for the far-away rectangle), cx = middle offset,
@@ -1160,7 +1169,7 @@
       return TYPES[0];
     }
 
-    // ---- Trains and boats: simple boxes, but with real detail (windows, bogies, stripes, containers, funnels...) ----
+    // Trains and boats: simple boxes, but with real detail (windows, bogies, stripes, containers, funnels...)
     // Extra colour kinds: a = this vehicle's accent colour (stripes), m = light metal, o = orange, x1..x6 = container colours
     const UNIT = {};      // rail unit types by name (locomotives, coaches, wagons, trams)
     const SHIP = {};      // boat types by name
@@ -1316,7 +1325,7 @@
       return CONSISTS[2];
     }
 
-    // ---- ships. z = 0 is the waterline: hull below (red antifouling), boot stripe, hull above, then the superstructure ----
+    // Ships. z = 0 is the waterline: hull below (red antifouling), boot stripe, hull above, then the superstructure
     // p.house = [{l, w, h, x}...] stacked tiers; p.stacks = container stacks (full model only)
     function ship(name, p) {
       const L = p.L, W = p.W, fb = p.fb, dr = p.dr;
@@ -1414,12 +1423,10 @@
       return SHIP[pick];
     }
 
-    /* ================================================================ *
-     *  RARE VEHICLES (RARE-BEGIN)
-     *  Exotic supercars, cruise ships and famous trains. They use the normal spawners: a spawn
-     *  occasionally rolls "rare" first. Where (region / port / route) is checked before anything is
-     *  built, every model is only created the first time it is picked, and rare ones stay rare.
-     * ================================================================ */
+    // Rare vehicles (RARE-BEGIN)
+    // Exotic supercars, cruise ships and famous trains. They use the normal spawners: a spawn
+    // occasionally rolls "rare" first. Where (region / port / route) is checked before anything is
+    // built, every model is only created the first time it is picked, and rare ones stay rare.
     function lazyDef(obj, names, build) {     // the models of a vehicle are built the first time one of its names is read
       names.forEach(function (n) {
         Object.defineProperty(obj, n, { configurable: true, enumerable: true, get: function () {
@@ -1430,7 +1437,7 @@
       });
     }
 
-    // ---- places: rough outlines, only used to decide where a rare vehicle is allowed ----
+    // Places: rough outlines, only used to decide where a rare vehicle is allowed
     const USA48 = [[48.4, -124.8], [49.0, -123.3], [49.0, -95.1], [48.1, -89.5], [46.5, -84.3], [45.9, -83.5], [43.6, -82.5], [42.9, -82.4], [42.0, -83.1], [41.7, -83.4],
       [42.9, -78.9], [43.25, -79.07], [43.45, -76.5], [44.1, -76.3], [45.0, -74.7], [45.0, -71.5], [45.3, -70.8], [47.4, -69.2], [47.3, -68.3], [45.9, -67.8], [44.8, -66.95],
       [43.5, -70.0], [41.5, -69.9], [41.0, -71.8], [40.6, -74.0], [39.0, -74.8], [37.0, -75.9], [35.2, -75.5], [33.8, -77.9], [32.0, -80.8], [30.7, -81.4], [27.0, -80.0],
@@ -1496,7 +1503,7 @@
       return (w.gent = ok);
     }
 
-    // ---- rarity: chance (in % of the spawns of that kind) of a rare vehicle of this tier. The sliders in Advanced change cfg.rareTier. ----
+    // Rarity: chance (in % of the spawns of that kind) of a rare vehicle of this tier. The sliders in Advanced change cfg.rareTier.
     const TIER_LABEL = { uncommon: 'Uncommon', rare: 'Rare', veryrare: 'Very rare', legendary: 'Legendary' };
     const KIND_SCALE = { road: 0.003, rail: 1, boat: 0.15 };   // cars spawn by the thousand (and there are 18 models), so they get a far smaller share
     // never more than this many alive at once, per kind and tier (so common rare ones can't use up all the room for the rarer ones)
@@ -1517,7 +1524,7 @@
       return defs[defs.length - 1];
     }
 
-    /* ---- supercars ---- */
+    // Supercars
     // wealth: global baseline, much higher in rich districts and next to each maker's home town
     const WEALTH = [[43.74, 7.42, 10, 12], [25.2, 55.27, 7, 30], [24.47, 54.37, 5, 25], [25.29, 51.53, 5, 20], [34.08, -118.4, 6, 25], [25.8, -80.13, 5, 20], [26.7, -80.04, 4, 15],
       [40.76, -73.97, 4, 15], [51.5, -0.16, 5, 12], [48.87, 2.3, 4, 12], [47.37, 8.54, 4, 12], [46.2, 6.15, 4, 10], [35.66, 139.74, 3, 15], [1.3, 103.85, 4, 20], [22.28, 114.17, 4, 15],
@@ -1571,7 +1578,7 @@
     }
     const SUPER_CLS = { motorway: 1, trunk: 1, primary: 1, secondary: 1, tertiary: 1, unclassified: 1, residential: 1 };
 
-    /* ---- trains ---- */
+    // Trains
     function flipX(parts) { parts.forEach(function (q) { q.at[0] = -q.at[0]; q.pitch = -q.pitch; if (q.k === 'h') q.k = 'r'; }); return parts; }
     // one car of a high-speed train: `nose` = length of the streamlined end (0 = a plain middle car)
     function hsCar(o, L, nose, pan) {
@@ -1727,7 +1734,7 @@
       { id: 'scotsman', name: 'Flying Scotsman', tier: 'legendary', region: ['uk'], minLen: 250, head: 'scotsE', lead: ['scotsT'], mid: ['coach'], tail: 'coachEnd', n: [5, 8], pal: ['#2a6b3a'], acc: ['#e8dcb8'], hex: { coach: '#6b3f1e', coachEnd: '#6b3f1e' }, v: 24 }
     ].map(function (d) { d.cat = 'rail'; d.cls = d.cls || ['rail']; d.spd = 1; return d; });
 
-    /* ---- cruise ships ---- */
+    // Cruise ports
     // name, lat, lon, area (a ship only sails where its line goes)
     const PORTS = [['Miami', 25.774, -80.17, 'carib'], ['Port Everglades', 26.089, -80.113, 'carib'], ['Port Canaveral', 28.41, -80.62, 'carib'], ['Tampa', 27.945, -82.45, 'carib'],
       ['Galveston', 29.31, -94.79, 'carib'], ['New Orleans', 29.935, -90.065, 'carib'], ['Nassau', 25.078, -77.352, 'carib'], ['Cozumel', 20.509, -86.953, 'carib'],
@@ -1745,7 +1752,7 @@
       ['Dubai', 25.27, 55.28, 'me'], ['Abu Dhabi', 24.53, 54.38, 'me'], ['Cape Town', -33.91, 18.43, 'safrica'], ['Rio de Janeiro', -22.89, -43.18, 'samer'], ['Buenos Aires', -34.58, -58.37, 'samer']
     ].map(function (r) { return { n: r[0], lat: r[1], lon: r[2], g: r[3] }; });
     const PORT_R = 20000;      // ships only appear within this distance of a cruise port
-    // ---- cruise ships ----
+    // Cruise ship models
     // A shaped hull (pointed bow in plan view, sheer, tapered stern), a stack of deck slices whose dark balcony bands run along both sides,
     // decks that step back at the bow (raked front) and the stern (terraces), orange lifeboats, funnels, bridge wings and class-specific
     // extras. Window glow strips for the night are saved on the model and drawn with the lights.
@@ -1762,7 +1769,7 @@
         if (x < sternX) { const t = (sternX - x) / (L / 2 + sternX); return 1 - 0.26 * Math.pow(t, 1.4); }
         return 1;
       };
-      // ---- hull slices
+      // Hull slices
       const xb = [];
       for (let i = 0; i <= 3; i++) xb.push(-L / 2 + (sternX + L / 2) * i / 3);
       for (let i = 1; i <= 5; i++) xb.push(sternX + (bowX - sternX) * i / 5);
@@ -1774,16 +1781,16 @@
         const top = fb + sheer(xc), hh = top - 0.4;
         out.push(part('hu' + i, l, w, hh, xc, 0, 0.4 + hh / 2, 'p'));
         out.push(part('hs' + i, l + 0.05, w + 0.12, 0.55, xc, 0, 0.9, 'a'));
-        if (x0 > o.fore - 2) out.push(part('fk' + i, l, w * 0.86, 0.3, xc, 0, top + 0.15, 'm'));        // forecastle deck
+        if (x0 > o.fore - 2) out.push(part('fk' + i, l, w * 0.86, 0.3, xc, 0, top + 0.15, 'm'));
       }
-      out.push(part('sk', o.aft + L / 2, W * 0.84, 0.3, (o.aft - L / 2) / 2, 0, fb + 0.15, 'm'));        // open stern deck
-      out.push(part('port', L * 0.58, W + 0.14, 0.5, -L * 0.02, 0, fb * 0.55 + 0.4, 'd', 'f'));        // row of portholes
+      out.push(part('sk', o.aft + L / 2, W * 0.84, 0.3, (o.aft - L / 2) / 2, 0, fb + 0.15, 'm'));
+      out.push(part('port', L * 0.58, W + 0.14, 0.5, -L * 0.02, 0, fb * 0.55 + 0.4, 'd', 'f'));
       for (let x = -L * 0.3; x < L * 0.27; x += 18) [1, -1].forEach(function (s) { glow.push({ l: 1.3, w: 0.3, h: 0.9, x: x, y: s * (W / 2 + 0.2), z: fb * 0.55 + 0.4, c: '#ffe0a0' }); });
       if (o.art) {                                                      // painted hull (Breakaway)
         const ks = ['x1', 'x3', 'x2', 'x4', 'x1', 'x3', 'x2'];
         for (let i = 0; i < 7; i++) [1, -1].forEach(function (s) { out.push(part('art' + i + (s > 0 ? 'a' : 'b'), 9, 0.3, 4.2 - (i % 3), L * 0.05 + i * 10.5, s * (W / 2 + 0.05), 4.2 + (i % 3) * 0.6, ks[i], 'f')); });
       }
-      // ---- decks
+      // Decks
       const decks = [];
       for (let i = 0; i < n; i++) {
         const xa = o.aft + Math.max(0, i - (o.aftFrom === undefined ? 99 : o.aftFrom) + 1) * (o.aftStep || 0);
@@ -1821,27 +1828,27 @@
         }
       });
       const topZ = fb + n * hd;
-      // ---- lifeboats
+      // Lifeboats
       if (o.lb) for (let x = o.lb[0], k = 0; x <= o.lb[1]; x += 11.5, k++) [1, -1].forEach(function (s) {
         out.push(part('lb' + k + (s > 0 ? 'a' : 'b'), 8.8, 2.5, 2.4, x, s * (W / 2 - 1.5), fb + 1.3, o.lb[2] || 'x6', 'f'));
         glow.push({ l: 8.8, w: 0.3, h: 0.5, x: x, y: s * (W / 2 - 0.1), z: fb + 2.1, c: '#ffd27a' });
       });
-      // ---- bridge wings
+      // Bridge wings
       const bd = decks[Math.min(n - 1, o.bridge === undefined ? n - 3 : o.bridge)];
       out.push(part('wing', 7, W + 3.2, 2.4, bd.xf - 4.5, 0, bd.z0 + hd * 0.55, 'k'));
       out.push(part('wingg', 0.4, W + 1, 1.1, bd.xf - 0.8, 0, bd.z0 + hd * 0.75, 'g'));
-      // ---- funnels
+      // Funnels
       (o.funnels || []).forEach(function (f, j) {
         const z = levelAt(f.x), y = f.y || 0;
         out.push(part('fn' + j, f.l, f.w, f.h, f.x, y, z + f.h / 2, f.k || 'k'));
         if (f.band) out.push(part('fnb' + j, f.l + 0.1, f.w + 0.1, f.h * 0.2, f.x, y, z + f.h * 0.66, f.band));
         out.push(part('fnc' + j, f.l * 0.96, f.w * 0.96, f.h * 0.13, f.x, y, z + f.h * 0.94, f.cap || 'd'));
       });
-      // ---- extras (placed on the highest deck under them)
+      // Extras (placed on the highest deck under them)
       (o.extras || []).forEach(function (e, i) { out.push(part('ex' + i, e[0], e[1], e[2], e[3], e[4], levelAt(e[3]) + e[2] / 2 + (e[7] || 0), e[5], e[6])); });
       const mx = decks[n - 1].xf - 4;
       out.push(part('mast', 0.8, 0.8, 10, mx, 0, topZ + 5, 'm', 'f'), part('radar', 0.4, 4, 0.4, mx, 0, topZ + 10.2, 'd', 'f'));
-      // ---- wake and bow wave (shorter than before, widening astern)
+      // Wake and bow wave
       out.push(part('wk0', L * 0.18, W * 0.85, 0.05, -L * 0.59, 0, 0.06, 'k', 'f'), part('wk1', L * 0.2, W * 0.55, 0.05, -L * 0.78, 0, 0.06, 'k', 'f'), part('wk2', L * 0.22, W * 0.3, 0.05, -L * 0.99, 0, 0.06, 'k', 'f'));
       [1, -1].forEach(function (s) { const bx = bowX + (L / 2 - bowX) * 0.55; out.push(part('bw' + (s > 0 ? 'a' : 'b'), L * 0.1, 1.5, 0.7, bx, s * (W * wf(bx) / 2 + 0.6), 0.45, 'k', 'f')); });
       tierFine(out);
@@ -1906,6 +1913,36 @@
       lazyDef(SHIP, [d.sname], function () { cruise(d.sname, d.o); });
       return d;
     });
+    // Titanic (a suggestion from BOEINGFAN2, who is credited in the label). One ship, only on her real route across the
+    // North Atlantic (Fastnet Rock to the spot where she sank). The open ocean has no map data, so the route is built here.
+    const TITANIC = { id: 'titanic', name: 'Titanic by BOEINGFAN2', tier: 'legendary', cat: 'boat', sname: 'titanic' };
+    lazyDef(SHIP, ['titanic'], function () {
+      cruise('titanic', { L: 269, W: 28.2, fb: 15.5, dr: 10.5, hd: 2.8, sheer: 4.6, spd: 1.55, pal: ['#15171b'], acc: '#e9e9e4',
+        aft: -92, fore: 70, n: 3, narrow: [2, 5], bridge: 1, balc: 1, lb: [-62, 56, 'x5'],
+        funnels: [{ x: 46, l: 6.4, w: 7.4, h: 19, k: 'x3', cap: 'd' }, { x: 16, l: 6.4, w: 7.4, h: 19, k: 'x3', cap: 'd' },
+                  { x: -14, l: 6.4, w: 7.4, h: 19, k: 'x3', cap: 'd' }, { x: -44, l: 6.4, w: 7.4, h: 19, k: 'x3', cap: 'd' }],
+        extras: [[1.4, 1.4, 38, 84, 0, 'm'], [1.4, 1.4, 34, -100, 0, 'm'], [3.2, 3.2, 1.6, 84, 0, 'd', 'f', 38]] });
+    });
+    const TITANIC_ROUTE = (function () {
+      function gc(a, b, f) {          // point a fraction f along the great circle from a to b
+        const r = Math.PI / 180, la1 = a[0] * r, lo1 = a[1] * r, la2 = b[0] * r, lo2 = b[1] * r;
+        const d = 2 * Math.asin(Math.sqrt(Math.pow(Math.sin((la2 - la1) / 2), 2) + Math.cos(la1) * Math.cos(la2) * Math.pow(Math.sin((lo2 - lo1) / 2), 2)));
+        const A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
+        const x = A * Math.cos(la1) * Math.cos(lo1) + B * Math.cos(la2) * Math.cos(lo2), y = A * Math.cos(la1) * Math.sin(lo1) + B * Math.cos(la2) * Math.sin(lo2), z = A * Math.sin(la1) + B * Math.sin(la2);
+        return [Math.atan2(z, Math.sqrt(x * x + y * y)) / r, Math.atan2(y, x) / r];
+      }
+      const legs = [[51.40, -9.60], [42.00, -47.00], [41.73, -49.93]];      // Fastnet Rock, "the corner", the spot where she sank
+      const pts = [];
+      for (let k = 0; k < legs.length - 1; k++) {
+        const len = distM(legs[k][0], legs[k][1], legs[k + 1][0], legs[k + 1][1]), n = Math.max(2, Math.round(len / 5000));
+        for (let i = 0; i < n; i++) pts.push(gc(legs[k], legs[k + 1], i / n));
+      }
+      pts.push(legs[legs.length - 1]);
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distM(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+      return { id: -9000000001, kind: 'boat', ms: 0, cls: 'fairway', pts: pts, nodes: pts.map(function (q, i) { return -9100000000 - i; }), len: cum[cum.length - 1],
+               oneway: true, lanes: 1, cum: cum, bridge: false, tunnel: false, hs: false, tile: 'titanic', th: pts.map(function () { return 0; }) };
+    })();
     let portCache = { t: 0, list: [] };
     function portsNear() {          // ports within reach of the player (re-checked every few seconds)
       if (Date.now() - portCache.t < 4000) return portCache.list;
@@ -1914,7 +1951,7 @@
       return portCache.list;
     }
 
-    /* ---- the roll: called by the normal spawners; null = spawn something ordinary ---- */
+    // The roll: called by the normal spawners; null = spawn something ordinary
     function rollRare(kind, way) {
       if (!cfg.rare || cfg.rareFreq <= 0) return null;
       const m = way.pts[way.pts.length >> 1];
@@ -1963,7 +2000,7 @@
     }
     /* (RARE-END) */
 
-    // ---- Pools of 3D models, created on demand and reused for whichever cars are nearest ----
+    // Pools of 3D models, created on demand and reused for whichever cars are nearest
     // Level 0 = full model (per type), level 1 = no small details (per type),
     // level 2 = one coloured rectangle scaled to the vehicle's size (shared by all types).
     const POOL_DETAIL = 25, POOL_MEDIUM = 80, POOL_RECT = 2000;
@@ -2072,7 +2109,7 @@
       p.pool.free.push(p);
     }
 
-    // ---- Night light beams: bright translucent 3D streaks, one small primitive per nearby car ----
+    // Night light beams: bright translucent 3D streaks, one small primitive per nearby car
     // Headlights throw a long white streak plus a faint pool on the road; taillights leave a short red one.
     // Seen from altitude they are stretched with distance so they still read as light trails.
     const beamAppearance = new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true, closed: false });
@@ -2097,12 +2134,12 @@
       const lampZ = (t.lit === 'both' || !t.lit) ? 0.65 : 1.6;
       [1, -1].forEach(function (sd) {
         if (front) {
-          defs.push({ l: 0.25, w: 0.5, h: 0.28, x: fx, y: sd * y, z: lampZ, col: col('#fffbe8', 1) });        // headlamp glow
-          defs.push({ l: 14, w: 0.4, h: 0.16, x: fx + 7, y: sd * y, z: lampZ - 0.05, col: col('#fff6d8', 0.6) });     // long white streak
+          defs.push({ l: 0.25, w: 0.5, h: 0.28, x: fx, y: sd * y, z: lampZ, col: col('#fffbe8', 1) });
+          defs.push({ l: 14, w: 0.4, h: 0.16, x: fx + 7, y: sd * y, z: lampZ - 0.05, col: col('#fff6d8', 0.6) });
         }
         if (rear) {
-          defs.push({ l: 0.25, w: 0.5, h: 0.28, x: rx, y: sd * y, z: lampZ + 0.05, col: col('#ff2020', 1) });         // tail lamp glow
-          defs.push({ l: 3, w: 0.4, h: 0.16, x: rx - 1.5, y: sd * y, z: lampZ + 0.05, col: col('#ff2a2a', 0.65) });     // short red streak
+          defs.push({ l: 0.25, w: 0.5, h: 0.28, x: rx, y: sd * y, z: lampZ + 0.05, col: col('#ff2020', 1) });
+          defs.push({ l: 3, w: 0.4, h: 0.16, x: rx - 1.5, y: sd * y, z: lampZ + 0.05, col: col('#ff2a2a', 0.65) });
         }
       });
       if (front) defs.push({ l: 10, w: 2.4, h: 0.04, x: fx + 5, y: 0, z: 0.12, col: col('#ffe9a6', 0.16) });        // headlight pool on the ground
@@ -2238,7 +2275,7 @@
         car.dir = dirs[(Math.random() * dirs.length) | 0];
         car.speed = speedFor(e.way, car);
         assignLane(car);
-        car.v = Math.min(car.v, 6);   // slow down for the turn
+        car.v = Math.min(car.v, 6);
         setSeg(car);
         return true;
       }
@@ -2323,14 +2360,14 @@
       assignLane(car);
       car.v = car.tv = car.speed;
       poseCar(car);
-      car.ptHead = car.ptTail = null;     // light points are handed out only to cars that are drawn at night
+      car.ptHead = car.ptTail = null;
       sampleGround(car);
       cars.push(car);
       kindCount.road++;
       return true;
     }
 
-    // ---- shared helpers for trains and boats ----
+    // Shared helpers for trains and boats
     function newVehicle(way, type, kind, hex) {
       return {
         id: carId++, kind: kind, way: way, i: 0, dir: 1, s: 0, segLen: 1, hdg: 0, a: null, b: null,
@@ -2377,7 +2414,7 @@
       car.s = Math.max(0, Math.min(car.segLen, car.s));
     }
 
-    // ---- trains: one simulated head plus trailing units that follow the head's exact path ----
+    // Trains: one simulated head plus trailing units that follow the head's exact path
     // true when another train / boat of the same kind is already within `r` metres of (lat, lon): do not spawn on top of it
     function crowded(kind, lat, lon, r) {
       const kx = 111320 * Math.cos(lat * D2R);
@@ -2451,7 +2488,7 @@
       return true;
     }
 
-    // ---- boats ----
+    // Boats
     function spawnBoat() {
       let way = pickWay('boat');
       if (!way) return false;
@@ -2470,6 +2507,33 @@
       car.v = car.tv = car.speed;
       poseCar(car);
       if (crowded('boat', car.lat, car.lon, car.type.L + 60)) { disposeVehicle(car); return false; }
+      sampleGround(car);
+      cars.push(car);
+      kindCount.boat++;
+      return true;
+    }
+
+    // Titanic: at most one alive. Appears on her route a few km from you (inside the boat reach), sailing west towards the iceberg.
+    function spawnTitanic() {
+      for (let k = 0; k < cars.length; k++) if (cars[k].rare && cars[k].rare.id === 'titanic') return false;
+      const p = playerPos(), R = reachM('boat'), pts = TITANIC_ROUTE.pts, ok = [];
+      for (let i = 0; i < pts.length - 4; i++) {
+        const d = distM(p.lat, p.lon, pts[i][0], pts[i][1]);
+        if (d > R * 0.2 && d < R * 0.85) ok.push(i);
+      }
+      if (!ok.length) return false;
+      const way = TITANIC_ROUTE, type = SHIP.titanic;
+      const car = newVehicle(way, type, 'boat', type.pal[0]);
+      car.rare = { id: TITANIC.id, name: TITANIC.name, tier: TITANIC.tier, cat: 'boat' };
+      if (type.accHex) car.accent = Cesium.Color.fromCssColorString(type.accHex);
+      car.speed = speedFor(way, car);
+      car.i = ok[(Math.random() * ok.length) | 0];
+      car.dir = 1;
+      setSeg(car);
+      car.s = Math.random() * car.segLen;
+      car.laneOff = 0;
+      car.v = car.tv = car.speed;
+      poseCar(car);
       sampleGround(car);
       cars.push(car);
       kindCount.boat++;
@@ -2530,8 +2594,8 @@
       }
     }
 
-    // ---- Detailed terrain: asks the terrain provider for its most detailed heights (not the blurry far-away
-    // mesh that is currently drawn). Measured once per road vertex in batches, no scene access at all. ----
+    // Detailed terrain: asks the terrain provider for its most detailed heights (not the blurry far-away
+    // mesh that is currently drawn). Measured once per road vertex in batches, no scene access at all.
     let terrainOK = false, detailBusy = 0, detailDone = 0, detailFails = 0;
     try { terrainOK = typeof Cesium.sampleTerrainMostDetailed === 'function' && !!viewer.terrainProvider; } catch (e) { terrainOK = false; }
     function runDetail() {
@@ -2585,9 +2649,7 @@
       car.hOK = 1;
     }
 
-    /* ---------------------------------------------------------------- *
-     *  NIGHT
-     * ---------------------------------------------------------------- */
+    // Night
     let night = false;
     let shadeQ = 1;                  // 1 = full daylight colour; lower = darker (follows the sun, like GeoFS's own night)
     function computeShade() {
@@ -2608,15 +2670,13 @@
       return sunElevation(date, p.lat, p.lon) < -3 * D2R;
     }
 
-    /* ---------------------------------------------------------------- *
-     *  PER-FRAME UPDATE (movement + LOD)
-     * ---------------------------------------------------------------- */
+    // Per-frame update (movement and level of detail)
     let lastT = performance.now();
     let frameNo = 0;
     const hpr = new Cesium.HeadingPitchRoll();
 
-    // ---- Traffic: each car keeps a safe gap to the car ahead in its lane, so one braking car
-    // makes everyone behind it slow down, and the jam ripples backwards. Runs 10 times a second. ----
+    // Traffic: each car keeps a safe gap to the car ahead in its lane, so one braking car
+    // makes everyone behind it slow down, and the jam ripples backwards. Runs 10 times a second.
     let followAcc = 0;
     function updateFollowing() {
       const now = performance.now();
@@ -2728,6 +2788,11 @@
       hpr.heading = car.hdg - Math.PI / 2;     // models face +X (east) at heading 0
       Cesium.Transforms.headingPitchRollToFixedFrame(scratchA, hpr, Cesium.Ellipsoid.WGS84,
         Cesium.Transforms.eastNorthUpToFixedFrame, p.modelMatrix);
+      if (cfg.farSize) {       // far vehicles are drawn bigger so they do not shrink to nothing (cars x3 at 4.5 km, trains x2.5, small boats x4; big ships are left alone)
+        const dd = car.d;
+        const sz = car.kind === 'boat' ? (car.type.L > 150 ? 1 : Math.min(4, dd / 3000)) : car.kind === 'rail' ? Math.min(2.5, dd / 2500) : Math.min(3, dd / 1500);
+        if (sz > 1) { Cesium.Cartesian3.fromElements(sz, sz, sz, scratchS); Cesium.Matrix4.multiplyByScale(p.modelMatrix, scratchS, p.modelMatrix); }
+      }
       if (p.pool.lod === 2) {
         // the shared unit box is stretched to this vehicle's overall size
         Cesium.Cartesian3.fromElements(car.type.cx, 0, 0, scratchT);
@@ -2801,10 +2866,10 @@
       }
     }
 
-    /* ---- rare vehicle highlighter (HL-BEGIN) ----
-     * A yellow ring on every rare vehicle that exists (it follows it, however far away it is), with its name and
-     * distance. When it is off screen, a yellow arrow at the edge of the screen points the way. Plain page
-     * elements over the game view, so distance and terrain in between do not matter. */
+    // Rare vehicle highlighter (HL-BEGIN)
+    // A yellow ring on every rare vehicle that exists (it follows it, however far away it is), with its name and
+    // distance. When it is off screen, a yellow arrow at the edge of the screen points the way. Plain page
+    // elements over the game view, so distance and terrain in between do not matter.
     let hlRoot = null, hlRect = '', hlList = [];
     const hlMap = new Map();
     function hlHide() { if (hlRoot && hlRoot.style.display !== 'none') hlRoot.style.display = 'none'; }
@@ -2914,7 +2979,7 @@
       if (tooHigh) { if (!hiddenHigh) { hideEverything(); hiddenHigh = true; } hlHide(); return; }
       hiddenHigh = false;
       try { updateHighlight(ho); } catch (e) { hlHide(); }     // the highlighter must never be able to stop the traffic
-      const modelRange = cfg.radiusKm * 1200 + camH;     // cars only exist inside the radius; this just covers the camera being above you
+      const modelRange = cfg.radiusKm * 1200 + camH, mrRail = reachM('rail') * 1.2 + camH, mrBoat = reachM('boat') * 1.2 + camH;     // per kind: boats and trains are drawn from farther away     // cars only exist inside the radius; this just covers the camera being above you
       terrBudget = 80;    // terrain lookups allowed this frame
       const useDetail = terrainOK;   // detailed terrain heights (falls back to plain terrain if unavailable)
 
@@ -2965,7 +3030,7 @@
 
         const ddx = (car.lon - camLon) * kx, ddy = (car.lat - camLat) * 111320, ddz = car.h + ho + 0.8 - camH;
         car.d = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);     // plain maths: much cheaper than building a Cesium position per car
-        car.vis = car.d < modelRange;
+        car.vis = car.d < (car.kind === 'boat' ? mrBoat : modelRange);
         if (car.vis) bins[Math.min(NBINS, (car.d / BIN) | 0)]++;
 
         if (car.dot) placeDot(car, ho);
@@ -2973,12 +3038,12 @@
         // keep an assigned model / beam in step with the car
         if (car.prim) writeModel(car, car.prim);
         if (car.beam) writeBeam(car, car.beam);
-        if (car.units) updateTrain(car, ho, camLat, camLon, kx, camH, modelRange);
+        if (car.units) updateTrain(car, ho, camLat, camLon, kx, camH, mrRail);
       }
 
       if (frameNo % 3 !== 0) return;
 
-      // ---- every 3rd frame: decide which cars get drawn, and how detailed ----
+      // Every 3rd frame: decide which cars get drawn, and how detailed
       // the distance cut-off that keeps at most maxDrawn cars comes from a histogram (no full sort)
       let acc = 0, cut = NBINS;
       for (let b = 0; b <= NBINS; b++) { acc += bins[b]; if (acc > cfg.maxDrawn) { cut = b; break; } }
@@ -2987,8 +3052,8 @@
       let dots = 0;
       for (let k = 0; k < cars.length; k++) {
         const c = cars[k];
-        if (c.vis && c.d < cutD) cand.push(c);
-        if (c.units) for (let m = 0; m < c.units.length; m++) { const u = c.units[m]; if (u.vis && u.d < cutD) cand.push(u); }
+        if (c.vis && (c.d < cutD || c.kind === 'boat')) cand.push(c);       // boats are few and big: never cut by the car limit
+        if (c.units) for (let m = 0; m < c.units.length; m++) { const u = c.units[m]; if (u.vis && (u.d < cutD || u.d < 6000)) cand.push(u); }
         if (c.vis && c.d >= cutD && cfg.farDots && dots < cfg.maxDots) {
           dots++;
           takeDot(c);
@@ -3005,8 +3070,9 @@
       for (let i = 0; i < cand.length; i++) {
         const c = cand[i];
         c.want = frameNo;
-        c.wl = c.d < lodNear ? 0 : c.d < lodMid ? 1 : 2;
-        c.bw = wantBeams && i < MAX_BEAMS && c.d < 9000 && c.type.lit !== 'none';
+        const bigShip = c.type.L > 150;      // big ships keep their detail much farther out
+        c.wl = c.d < (bigShip ? lodNear * 3 : lodNear) ? 0 : c.d < (bigShip ? 30000 : lodMid) ? 1 : 2;
+        c.bw = wantBeams && i < MAX_BEAMS && c.d < (bigShip ? 20000 : 9000) && c.type.lit !== 'none';
       }
       if (pointCars.size) pointCars.forEach(function (c) { if (c.want !== frameNo || !night) freePoints(c); });
       // free models / beams whose car left the list or needs a different level of detail
@@ -3051,21 +3117,17 @@
     }
     viewer.scene.preRender.addEventListener(frame);
 
-    /* ---------------------------------------------------------------- *
-     *  SLOW TICK (tiles, spawning, despawning)
-     * ---------------------------------------------------------------- */
-    /* ---------------------------------------------------------------- *
-     *  AUTO-CONFIGURE (AUTO-BEGIN)
-     *  Looks at the map data around you and picks radius, cars, trains and boats.
-     *  Dense city = smaller radius and lots of cars; countryside = bigger radius, fewer cars;
-     *  busy harbours = more boats. Time of day (local solar time) thins traffic at night.
-     *  A frame-rate guard backs off when the game gets slow. Your Manual values are kept.
-     * ---------------------------------------------------------------- */
+    // Slow tick (tiles, spawning, despawning)
+    // Auto-Configure (AUTO-BEGIN)
+    // Looks at the map data around you and picks radius, cars, trains and boats.
+    // Dense city = smaller radius and lots of cars; countryside = bigger radius, fewer cars;
+    // busy harbours = more boats. Time of day (local solar time) thins traffic at night.
+    // A frame-rate guard backs off when the game gets slow. Your Manual values are kept.
     // how many cars each kind of road holds per km, how many trains per km of track, boats per km of water route
     const CAR_PER_KM = { motorway: 20, trunk: 16, primary: 15, secondary: 11, tertiary: 8, unclassified: 5, residential: 4.5, living_street: 1.5 };
     const TRAIN_PER_KM = { rail: 0.07, light_rail: 0.15, subway: 0.2, tram: 0.25, narrow_gauge: 0.06 };
     const BOAT_PER_KM = { ferry: 0.22, fairway: 0.35, river: 0.12 };
-    const AUTO_CAPS = { low: { cars: 4500, trains: 100, boats: 150, drawn: 800 }, regular: { cars: 3000, trains: 60, boats: 120, drawn: 500 }, high: { cars: 2000, trains: 35, boats: 80, drawn: 350 } };
+    const AUTO_CAPS = { low: { cars: 4500, trains: 100, boats: 150, drawn: 1000 }, regular: { cars: 3000, trains: 60, boats: 120, drawn: 700 }, high: { cars: 2000, trains: 35, boats: 80, drawn: 450 } };
     // traffic through the day (local solar hour -> share of the daytime amount)
     const DAY_CURVE = [[0, 0.35], [4, 0.3], [6, 0.7], [8, 1.1], [10, 0.95], [13, 1.0], [16, 1.0], [18, 1.15], [20, 0.8], [22, 0.55], [24, 0.35]];
     const AUTO = { t: 0, scanT: 0, place: null, fresh: true, guard: 1, slow: 0, fast: 0, ema: 16, since: 0, info: null, note: 'Starting...' };
@@ -3100,7 +3162,7 @@
           const w = t.ways[k];
           const m = w.pts[w.pts.length >> 1];
           const dm = distM(p.lat, p.lon, m[0], m[1]);
-          if (dm > rM) continue;
+          if (dm > reachOf(w.kind, rM)) continue;        // trains and boats are counted over their larger reach
           const km = w.len / 1000;
           if (w.kind === 'road') { const d = (CAR_PER_KM[w.cls] || 4) * km * (w.tunnel ? 0.2 : 1); S.dR += d; if (dm <= 3000) S.d3 += d; }
           else if (w.kind === 'rail') S.train += (TRAIN_PER_KM[w.cls] || 0.07) * km * (w.tunnel ? 0.3 : 1);
@@ -3133,7 +3195,7 @@
       const S3 = autoScan(p, 3000);
       const D = Math.max(0.5, S3.d3 / (Math.PI * 9));           // cars per km2 the roads here can hold
       let r = Math.round(Math.sqrt(caps.cars * 0.8 / (Math.PI * D)));
-      r = Math.max(4, Math.min(8, r));
+      r = Math.max(5, Math.min(9, r));
       if (AUTO.fresh || Math.abs(r - cfg.radiusKm) >= 2) { if (r !== cfg.radiusKm) { cfg.radiusKm = r; poolDirty = true; } }
       AUTO.fresh = false;
 
@@ -3144,7 +3206,7 @@
       const fTrain = 0.45 + 0.55 * Math.min(1, f), fBoat = 0.7 + 0.3 * Math.min(1, f);
       // until the whole radius has loaded, estimate from the 3 km around you (cautiously)
       const cars = loaded ? S.dR * f : D * Math.PI * cfg.radiusKm * cfg.radiusKm * 0.5 * f;
-      const railReady = tilesReady(p, rM, 'rail'), waterReady = tilesReady(p, rM, 'boat');
+      const railReady = tilesReady(p, reachOf('rail', rM), 'rail'), waterReady = tilesReady(p, reachOf('boat', rM), 'boat');
       let trains = railReady ? Math.round(S.train * fTrain) : cfg.maxTrains;
       if (railReady && S.train > 0.15 && trains < 1) trains = 1;
       let boats = waterReady ? Math.round(S.boat * fBoat) : cfg.maxBoats;
@@ -3207,9 +3269,9 @@
 
       for (let k = cars.length - 1; k >= 0; k--) {
         const c = cars[k];
-        if (distM(p.lat, p.lon, c.lat, c.lon) > r * 1.05 ||
+        if (distM(p.lat, p.lon, c.lat, c.lon) > reachM(c.kind) * 1.05 ||
             (c.kind === 'rail' && (!cfg.trains || kindCount.rail > cfg.maxTrains)) ||
-            (c.kind === 'boat' && (!cfg.boats || kindCount.boat > cfg.maxBoats))) removeCar(k);
+            (c.kind === 'boat' && !(c.rare && c.rare.id === 'titanic') && (!cfg.boats || kindCount.boat > cfg.maxBoats))) removeCar(k);   // the Titanic sails in open ocean where there are no other boats
       }
       // above the cap (slider lowered): farthest cars leave in quick batches, not all in one frame
       const over = kindCount.road - cfg.maxCars;
@@ -3228,6 +3290,9 @@
       while (cfg.trains && kindCount.rail < cfg.maxTrains && n < 3 && PK.rail.pool.length) { if (!spawnTrain()) break; n++; }
       n = 0;
       while (cfg.boats && kindCount.boat < cfg.maxBoats && n < 6 && PK.boat.pool.length) { if (!spawnBoat()) break; n++; }
+      // the Titanic: only when rare ships are on, and rarer the lower the Legendary slider is (0 = never)
+      if (cfg.rare && cfg.rareShips && (cfg.boats || cfg.mode === 'auto') && cfg.rareFreq > 0 && cfg.rareTier.legendary > 0 &&
+          Math.random() < 0.0015 * cfg.rareFreq * cfg.rareTier.legendary / 0.3) spawnTitanic();
       if (JUMP.car === null && kindCount.road > 0) JUMP.car = Date.now() - JUMP.t0;
       updateStatus();
     }
@@ -3240,10 +3305,8 @@
       poolDirty = true;
     }
 
-    /* ---------------------------------------------------------------- *
-     *  SETTINGS PANEL
-     * ---------------------------------------------------------------- */
-    let statusEl = null, statusSum = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
+    // Settings panel
+    let statusEl = null, statusSum = null, warnEl = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
     function updateStatus() {
       if (!statusEl || !statusSum) return;
       let done = 0, queued = 0, loading = 0, failed = 0;
@@ -3260,6 +3323,11 @@
       if (autoTextEl && cfg.mode === 'auto') autoTextEl.textContent = autoText();
       hlList = cars.filter(function (c) { return c.rare; });
       if (rareEl && tick % 8 === 0) rareEl.textContent = 'Rare vehicles near you right now: ' + (rareList() || 'none');
+      if (warnEl) {      // nothing loaded for a while: say so plainly instead of looking broken
+        const stuck = done === 0 && kindCount.road === 0 && JUMP.t0 && Date.now() - JUMP.t0 > 35000 && (loading + queued + failed) > 0;
+        warnEl.style.display = stuck ? '' : 'none';
+        if (stuck) warnEl.textContent = "Can't load map data yet. Your network may be blocking the map servers (common in some countries, a VPN can help), or they are just slow. It keeps trying in the background.";
+      }
       statusSum.textContent = 'Tiles: ' + loading + ' loading / ' + done + ' loaded';
       const srcTxt = cfg.source === 'overpass' ? 'Overpass only (your choice)' : VEC.state === 'ok' ? 'fast map tiles' : VEC.state === 'down' ? 'Overpass (fast tiles unavailable: ' + VEC.note + ')' : 'fast map tiles (starting)';
       statusEl.textContent = 'roads from: ' + srcTxt + ' | ' + kindCount.road + ' cars, ' + kindCount.rail + ' trains, ' + kindCount.boat + ' boats (' + PK.road.pool.length + ' roads, ' +
@@ -3270,9 +3338,9 @@
     }
 
     function buildPanel() {
-      const VERSION = '0.23.0';
+      const VERSION = '0.26.2';
       const LOGO = 'data:image/png;base64,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';
-      // ---- look: native GeoFS classes for the panel and buttons, a little extra CSS for the sections ----
+      // Look: native GeoFS classes for the panel and buttons, a little extra CSS for the sections
       const css = document.createElement('style');
       css.textContent =
         '.living-world-panel{min-width:280px;max-width:320px;padding:12px 14px;box-sizing:border-box}' +
@@ -3289,6 +3357,7 @@
         '.living-world-panel .lw-soon span{font-weight:normal;font-size:10px;margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,.35);border-radius:8px}' +
         '.living-world-panel .lw-row{margin:6px 0 2px 0;font-size:12px;line-height:1.35}' +
         '.living-world-panel .lw-row b{font-weight:600}' +
+        '.living-world-panel .lw-warn{color:#ffcf5a;font-size:11px}' +
         '.living-world-panel .lw-hint{opacity:.6;font-size:11px}' +
         '.living-world-panel input[type=range]{width:100%;margin:2px 0 4px 0;accent-color:#4cc38a}' +
         '.living-world-panel input[type=checkbox]{accent-color:#4cc38a}' +
@@ -3320,7 +3389,7 @@
 
       const mk = function (tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 
-      // ---- header + master switch ----
+      // Header + master switch
       const head = mk('div', 'lw-head');
       const brand = mk('div', 'lw-logo');
       const logoImg = document.createElement('img'); logoImg.src = LOGO; logoImg.alt = '';
@@ -3336,7 +3405,7 @@
       refreshMaster();
       panel.appendChild(master);
 
-      // ---- little control builders ----
+      // Little control builders
       function soon(title) {
         const d = mk('details', 'lw-soon');
         const s = mk('summary', '', title); s.appendChild(mk('span', '', 'coming soon'));
@@ -3366,9 +3435,9 @@
       }
       function hint(parent, text) { parent.appendChild(mk('div', 'lw-row lw-hint', text)); }
 
-      // ---- two pages: Main (the few things most people need) and Advanced (everything else) ----
+      // Two pages: Main (the few things most people need) and Advanced (everything else)
       const tabs = mk('div', 'lw-tabs');
-      const tMain = mk('div', 'lw-tab on', 'Main'), tAdv = mk('div', 'lw-tab', 'Advanced');
+      const tMain = mk('div', 'lw-tab on', 'Main'), tAdv = mk('div', 'lw-tab', 'Extra & Performance');
       tabs.appendChild(tMain); tabs.appendChild(tAdv);
       panel.appendChild(tabs);
       const pgMain = mk('div', 'lw-page'), pgAdv = mk('div', 'lw-page');
@@ -3434,6 +3503,7 @@
       hint(pgMain, 'Low: simpler cars, trains and boats (fastest). Regular: detailed, without the tiniest parts of trains and boats. High: everything. Lower it if the game lags.');
       statusSum = mk('div', 'lw-status', 'Tiles: 0 loading / 0 loaded');
       pgMain.appendChild(statusSum);
+      warnEl = mk('div', 'lw-row lw-warn', ''); warnEl.style.display = 'none'; pgMain.appendChild(warnEl);
 
       // Advanced page
       const sTraffic = section('Traffic', false);
@@ -3457,6 +3527,7 @@
       const drawnInp = slider(sPerf, 'Max drawn cars', 'maxDrawn', 100, 3000, 100, '');
       const drawnHint = mk('div', 'lw-row lw-hint', 'Lower this first if the game lags. (Auto-Configure sets this by itself while it is on.)');
       sPerf.appendChild(drawnHint);
+      check(sPerf, 'Draw distant vehicles a bit bigger so they stay visible', 'farSize');
       check(sPerf, 'Show the rest of the cars as small dots', 'farDots');
 
       const sLight = section('Night lighting', false);
@@ -3486,7 +3557,7 @@
         inp.addEventListener('input', function () { cfg.rareTier[t[0]] = +inp.value; val.textContent = String(cfg.rareTier[t[0]]); saveCfg(); });
         sRare.appendChild(row); sRare.appendChild(inp);
       });
-      hint(sRare, 'Uncommon: modern American locomotives. Rare: bullet trains, TGV, ICE, cruise ships. Very rare: luxury trains, the biggest ships, supercars. Legendary: Big Boy, Mallard, Flying Scotsman. Cars get a far smaller share. Only a few of each tier exist at once.');
+      hint(sRare, 'Uncommon: modern American locomotives. Rare: bullet trains, TGV, ICE, cruise ships. Very rare: luxury trains, the biggest ships, supercars. Legendary: Big Boy, Mallard, Flying Scotsman, and the Titanic on her route across the Atlantic. Cars get a far smaller share. Only a few of each tier exist at once.');
       rareEl = mk('div', 'lw-row lw-hint', 'Rare vehicles near you right now: none');
       sRare.appendChild(rareEl);
 
@@ -3498,8 +3569,9 @@
       slider(sBoat, 'Boat height offset', 'waterOffset', -60, 60, 1, 'm');
       hint(sBoat, 'Boats float above or sink into the water? Nudge the offset.');
 
+      const sDiag = section('Advanced', false);        // the long diagnostics text lives here, at the bottom
       statusEl = mk('div', 'lw-status', '');
-      pgAdv.appendChild(statusEl);
+      sDiag.appendChild(statusEl);
 
       const refreshMode = function () {
         const a = cfg.mode === 'auto';
@@ -3512,7 +3584,7 @@
       mBtn.auto.onclick = function () { setMode('auto'); refreshMode(); };
       refreshMode();
 
-      // ---- credits (required by the OpenStreetMap licence: shown on both pages) ----
+      // Credits (required by the OpenStreetMap licence: shown on both pages)
       const credit = mk('div', 'lw-credit');
       const link = function (text, href) {
         const a = document.createElement('a'); a.textContent = text; a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
@@ -3529,9 +3601,9 @@
       credit.appendChild(document.createTextNode('. Menu style based on GeoFS After Dark by SkyTeamDelta.'));
       panel.appendChild(credit);
 
-      try { if (W.componentHandler && W.componentHandler.upgradeElements) W.componentHandler.upgradeElements(panel); } catch (e) { /* styling only */ }
+      try { if (W.componentHandler && W.componentHandler.upgradeElements) W.componentHandler.upgradeElements(panel); } catch (e) { }
 
-      // ---- placement: GeoFS's own left panel area + a button in the bottom bar (same as built-in menus) ----
+      // Placement: GeoFS's own left panel area + a button in the bottom bar (same as built-in menus)
       const left = document.querySelector('.geofs-ui-left');
       const bottom = document.querySelector('.geofs-ui-bottom');
       const iconHtml = '<span style="display:inline-block;width:32px;height:32px;vertical-align:middle;background:url(' + LOGO + ') center/92% no-repeat"></span>';
