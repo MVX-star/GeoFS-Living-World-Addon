@@ -7,7 +7,7 @@
 // @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
 // @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
 // @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
-// @version      0.26.5
+// @version      0.26.6
 // @description  (Beta) GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
 // @match        https://geo-fs.com/geofs.php*
@@ -717,11 +717,12 @@
 
     // Fast tile loading and the fallback to Overpass
     const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
-    const VEC = { state: 'init', tpl: null, z: 14, fails: 0, ok: 0, empty: 0, downUntil: 0, probing: false, note: '', lastOk: 0 };
+    const VEC = { state: 'init', tpl: null, z: 14, fails: 0, ok: 0, empty: 0, downUntil: 0, probing: false, note: '', lastOk: 0, t0: Date.now() };
     // state: init = looking up the tile address, ok = working, down = not working (Overpass is used instead)
     const vecData = new Map();      // 'z/x/y' -> { st: 'loading'|'done', rec, waiters, t }: one download feeds the main, local and rail tiles
     let vecWayId = 0;
-    function useVec() { return cfg.source !== 'overpass' && VEC.state !== 'down'; }
+    // while the tile address is still being looked up (first few seconds) the map loads from Overpass, so nothing waits on the lookup
+    function useVec() { return cfg.source !== 'overpass' && VEC.state !== 'down' && (!!VEC.tpl || Date.now() - VEC.t0 < 8000); }
 
     function httpGet(url, binary, timeout, ok, err) {
       const o = { method: 'GET', url: url, timeout: timeout, responseType: binary ? 'arraybuffer' : 'text',
@@ -738,29 +739,50 @@
         });
       }).catch(function (e) { if (!done) { done = true; clearTimeout(to); err(e); } });
     }
+    // short history of source changes, shown in the diagnostic text (Advanced > Copy diagnostic info)
+    const EVLOG = [];
+    function logEv(m) { EVLOG.push(new Date().toTimeString().slice(0, 8) + ' ' + m); if (EVLOG.length > 40) EVLOG.shift(); }
+    const RECHECK_MS = 60000;      // how soon the fast tiles are tried again after they fail
     function vecDown(msg) {
+      logEv('fast tiles down: ' + msg + ' (cars ' + cars.length + ', tiles ' + tiles.size + ')');
       VEC.state = 'down'; VEC.note = msg; VEC.probing = false;
-      VEC.downUntil = Date.now() + 10 * 60000;
+      VEC.downUntil = Date.now() + RECHECK_MS;
       lastMsg = 'fast map tiles not available (' + msg + ') - using Overpass instead';
       console.warn('[GeoFS Living World] ' + lastMsg);
     }
-    // finds the current tile address; probe = a quiet re-check while Overpass is in use
+    // finds the current tile address; probe = a quiet re-check while Overpass is in use.
+    // One failed lookup is not enough to give up: it tries three times, then falls back to the last address that worked.
     function vecDiscover(probe) {
       if (VEC.probing) return;
       VEC.probing = true;
-      httpGet(TILEJSON_URL, false, 8000, function (res) {
-        try {
-          if (res.status !== 200) throw new Error('HTTP ' + res.status);
-          const tj = JSON.parse(res.responseText);
-          const tpl = tj.tiles && tj.tiles[0];
-          if (typeof tpl !== 'string' || tpl.indexOf('{z}') < 0 || tpl.indexOf('{x}') < 0 || tpl.indexOf('{y}') < 0) throw new Error('no tile address');
+      const giveUp = function (why) {
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem('gftraffic_tpl')); } catch (e) { saved = null; }
+        if (!probe && saved && typeof saved.tpl === 'string' && !VEC.tpl) {
+          VEC.tpl = saved.tpl; VEC.z = saved.z || 14; VEC.state = 'ok'; VEC.probing = false; VEC.lastOk = 0;
+          logEv('tile index failed (' + why + '), using the saved tile address');
+          return;
+        }
+        if (probe) { VEC.probing = false; VEC.downUntil = Date.now() + RECHECK_MS; } else vecDown(why);
+      };
+      const attempt = function (n) {
+        const retry = function (why) { if (n < 3) setTimeout(function () { attempt(n + 1); }, 2000 * n); else giveUp(why); };
+        httpGet(TILEJSON_URL, false, 10000, function (res) {
+          let tpl = null, tj = null;
+          try {
+            if (res.status !== 200) throw new Error('HTTP ' + res.status);
+            tj = JSON.parse(res.responseText);
+            tpl = tj.tiles && tj.tiles[0];
+            if (typeof tpl !== 'string' || tpl.indexOf('{z}') < 0 || tpl.indexOf('{x}') < 0 || tpl.indexOf('{y}') < 0) throw new Error('no tile address');
+          } catch (e) { retry('tile index: ' + e.message); return; }
           VEC.tpl = tpl; VEC.z = Math.max(10, Math.min(14, +tj.maxzoom || 14));
           VEC.state = 'ok'; VEC.fails = 0; VEC.empty = 0; VEC.ok = 0; VEC.lastOk = 0; VEC.probing = false; VEC.note = '';
+          try { localStorage.setItem('gftraffic_tpl', JSON.stringify({ tpl: VEC.tpl, z: VEC.z })); } catch (e) { /* ignore */ }
+          logEv('fast tiles ready' + (n > 1 ? ' (attempt ' + n + ')' : ''));
           lastMsg = 'fast map tiles ready';
-        } catch (e) { if (probe) { VEC.probing = false; VEC.downUntil = Date.now() + 10 * 60000; } else vecDown('tile index: ' + e.message); }
-      }, function (e) {
-        if (probe) { VEC.probing = false; VEC.downUntil = Date.now() + 10 * 60000; } else vecDown('service not reachable');
-      });
+        }, function (e) { retry('service not reachable'); });
+      };
+      attempt(1);
     }
     function vecTileUrl(z, x, y) { return VEC.tpl.replace('{z}', z).replace('{x}', x).replace('{y}', y); }
     // tile square -> latitude / longitude of a point inside it (fx, fy = 0..1)
@@ -887,14 +909,31 @@
     }
     // switching between fast tiles and Overpass: remove what the other source loaded so nothing is doubled
     let lastVecActive = null;
+    // Switching between the fast tiles and Overpass never empties the map: the old tiles stay (and keep their cars)
+    // until the new source has loaded the area around you, so a hiccup cannot wipe everything.
+    let swapSince = 0;
     function applySource() {
       const v = useVec();
       if (lastVecActive === null) { lastVecActive = v; }
-      else if (v !== lastVecActive) {
-        lastVecActive = v;
-        const dead = new Set();
-        tiles.forEach(function (t, key) { if (t.layer !== 'water' && (!!t.vec) !== v) dead.add(key); });
-        removeTiles(dead);
+      else if (v !== lastVecActive) { lastVecActive = v; swapSince = Date.now(); logEv('roads now from ' + (v ? 'fast tiles' : 'Overpass') + ' (old tiles kept until the new ones load)'); }
+      if (swapSince) {
+        const p = playerPos();
+        let any = false, busy = false, old = 0;
+        tiles.forEach(function (t) {
+          if (t.layer === 'water') return;
+          if (!!t.vec !== v) { old++; return; }
+          if (layerKindOf(t.layer) !== 'road') return;
+          const c = tileCenter(t);
+          if (distM(p.lat, p.lon, c.lat, c.lon) > 3000 + t.size * 111320 * 0.7) return;
+          if (t.state === 'done') any = true; else if (t.state !== 'failed') busy = true;
+        });
+        if (!old) swapSince = 0;
+        else if (any && (!busy || Date.now() - swapSince > 45000)) {
+          const dead = new Set();
+          tiles.forEach(function (t, key) { if (t.layer !== 'water' && (!!t.vec) !== v) dead.add(key); });
+          logEv('removed ' + dead.size + ' old tiles after the new source loaded');
+          removeTiles(dead); swapSince = 0;
+        }
       }
       if (cfg.source !== 'overpass') {
         if (VEC.state === 'init' && !VEC.tpl) vecDiscover(false);
@@ -3319,6 +3358,7 @@
     }
 
     // Settings panel
+    const VERSION_STR = '0.26.6';
     let statusEl = null, statusSum = null, warnEl = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
     function updateStatus() {
       if (!statusEl || !statusSum) return;
@@ -3338,8 +3378,10 @@
       if (rareEl && tick % 8 === 0) rareEl.textContent = 'Rare vehicles near you right now: ' + (rareList() || 'none');
       if (warnEl) {      // nothing loaded for a while: say so plainly instead of looking broken
         const stuck = done === 0 && kindCount.road === 0 && JUMP.t0 && Date.now() - JUMP.t0 > 35000 && (loading + queued + failed) > 0;
-        warnEl.style.display = stuck ? '' : 'none';
+        const slow = !stuck && cfg.source !== 'overpass' && VEC.state === 'down';
+        warnEl.style.display = stuck || slow ? '' : 'none';
         if (stuck) warnEl.textContent = "Can't load map data yet. Your network may be blocking the map servers (common in some countries, a VPN can help), or they are just slow. It keeps trying in the background.";
+        else if (slow) warnEl.textContent = 'The fast map tiles are not reachable right now (' + VEC.note + '), so roads load from the slower Overpass servers. It checks again every minute and switches back by itself.';
       }
       statusSum.textContent = 'Tiles: ' + loading + ' loading / ' + done + ' loaded';
       const srcTxt = cfg.source === 'overpass' ? 'Overpass only (your choice)' : VEC.state === 'ok' ? 'fast map tiles' : VEC.state === 'down' ? 'Overpass (fast tiles unavailable: ' + VEC.note + ')' : 'fast map tiles (starting)';
@@ -3350,8 +3392,32 @@
         jumpTxt + ' | cache hits: ' + cacheHits + ' | LAST RESULT: ' + lastMsg + (busy ? ' | in flight: ' + inflight + ' (latest ' + reqHost + ' via ' + transport + ')' : '');
     }
 
+    // Everything needed to see why the map or the traffic looks wrong, as plain text for a bug report
+    function diagText() {
+      const L = [];
+      const p = playerPos();
+      const by = {};
+      tiles.forEach(function (t) { const k = t.layer + ' ' + t.state; by[k] = (by[k] || 0) + 1; });
+      L.push('GeoFS Living World ' + VERSION_STR + ' | ' + new Date().toISOString());
+      L.push('mode ' + cfg.mode + ', source ' + cfg.source + ', radius ' + cfg.radiusKm + ' km, cars ' + cfg.maxCars + ', trains ' + cfg.maxTrains + ', boats ' + cfg.maxBoats + ', drawn ' + cfg.maxDrawn);
+      L.push('position ' + p.lat.toFixed(2) + ', ' + p.lon.toFixed(2));
+      L.push('fast tiles: state ' + VEC.state + (VEC.note ? ' (' + VEC.note + ')' : '') + ', ok ' + VEC.ok + ', fails in a row ' + VEC.fails + ', empty ' + VEC.empty + ', last success ' + (VEC.lastOk ? Math.round((Date.now() - VEC.lastOk) / 1000) + ' s ago' : 'never') + ', address ' + (VEC.tpl ? 'known' : 'unknown'));
+      L.push('live: ' + kindCount.road + ' cars, ' + kindCount.rail + ' trains, ' + kindCount.boat + ' boats | cache hits ' + cacheHits + ' | transport ' + transport);
+      L.push('tiles: ' + Object.keys(by).sort().map(function (k) { return k + '=' + by[k]; }).join(', '));
+      L.push('last result: ' + lastMsg);
+      L.push('events:'); EVLOG.forEach(function (e) { L.push('  ' + e); });
+      L.push(navigator.userAgent);
+      return L.join('\n');
+    }
+    function copyText(txt) {
+      try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt); return true; } } catch (e) { /* fall through */ }
+      try {
+        const ta = document.createElement('textarea'); ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+      } catch (e) { return false; }
+    }
+
     function buildPanel() {
-      const VERSION = '0.26.5';
       const LOGO = 'data:image/png;base64,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';
       // Look: native GeoFS classes for the panel and buttons, a little extra CSS for the sections
       const css = document.createElement('style');
@@ -3409,7 +3475,7 @@
       brand.appendChild(logoImg);
       brand.appendChild(mk('div', 'lw-title', 'GeoFS Living World Addon'));
       head.appendChild(brand);
-      head.appendChild(mk('div', 'lw-ver', 'v' + VERSION));
+      head.appendChild(mk('div', 'lw-ver', 'v' + VERSION_STR));
       panel.appendChild(head);
       const master = mk('button', 'mdl-button mdl-js-button mdl-button--raised mdl-button--colored');
       master.style.width = '100%';
@@ -3585,6 +3651,10 @@
       const sDiag = section('Advanced', false);        // the long diagnostics text lives here, at the bottom
       statusEl = mk('div', 'lw-status', '');
       sDiag.appendChild(statusEl);
+      const copyBtn = mk('div', 'lw-tab', 'Copy diagnostic info');
+      copyBtn.style.marginTop = '8px';
+      copyBtn.onclick = function () { copyBtn.textContent = copyText(diagText()) ? 'Copied! Paste it in your bug report' : 'Could not copy'; setTimeout(function () { copyBtn.textContent = 'Copy diagnostic info'; }, 3000); };
+      sDiag.appendChild(copyBtn);
 
       const refreshMode = function () {
         const a = cfg.mode === 'auto';
