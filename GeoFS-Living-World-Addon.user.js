@@ -7,7 +7,7 @@
 // @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
 // @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
 // @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
-// @version      0.26.6
+// @version      0.26.7
 // @description  (Beta) GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
 // @match        https://geo-fs.com/geofs.php*
@@ -231,7 +231,8 @@
     // Persistent tile cache (IndexedDB): revisiting an area loads instantly
     let idb = null, idbReady = false;
     try {
-      const rq = indexedDB.open('gftraffic2', 1);
+      try { indexedDB.deleteDatabase('gftraffic2'); } catch (e0) { /* old cache, may hold empty tiles saved when Overpass was overloaded */ }
+      const rq = indexedDB.open('gftraffic3', 1);
       rq.onupgradeneeded = function () { rq.result.createObjectStore('tiles'); };
       rq.onsuccess = function () { idb = rq.result; idbReady = true; };
       rq.onerror = function () { idbReady = true; };
@@ -245,6 +246,10 @@
         rq.onsuccess = function () { const v = rq.result; cb(v && Date.now() - v.t < CACHE_TTL ? v.ways : null); };
         rq.onerror = function () { cb(null); };
       } catch (e) { cb(null); }
+    }
+    function cacheClear() {
+      if (!idb) return;
+      try { idb.transaction('tiles', 'readwrite').objectStore('tiles').clear(); } catch (e) { /* ignore */ }
     }
     function cachePut(key, specs) {
       if (!idb) return;
@@ -381,6 +386,8 @@
             if (res.status === 200) {
               try {
                 const json = JSON.parse(res.responseText);
+                // An overloaded server answers 200 with no roads and a remark. That is a failure, not an empty tile.
+                if (json.remark && /runtime error|timed out|out of memory|rate_limited|too busy/i.test(json.remark)) throw new Error('server overloaded (' + String(json.remark).slice(0, 50) + ')');
                 const specs = parseSpecs(json, L.kind || 'road');
                 addWays(t, specs);
                 t.state = 'done';
@@ -717,7 +724,7 @@
 
     // Fast tile loading and the fallback to Overpass
     const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
-    const VEC = { state: 'init', tpl: null, z: 14, fails: 0, ok: 0, empty: 0, downUntil: 0, probing: false, note: '', lastOk: 0, t0: Date.now() };
+    const VEC = { state: 'init', tpl: null, z: 14, fails: 0, ok: 0, empty: 0, downUntil: 0, probing: false, note: '', lastOk: 0, t0: Date.now(), pauseUntil: 0 };
     // state: init = looking up the tile address, ok = working, down = not working (Overpass is used instead)
     const vecData = new Map();      // 'z/x/y' -> { st: 'loading'|'done', rec, waiters, t }: one download feeds the main, local and rail tiles
     let vecWayId = 0;
@@ -823,6 +830,7 @@
     function vecFailEntry(k, e, msg) {
       vecData.delete(k);
       VEC.fails++;
+      VEC.pauseUntil = Date.now() + Math.min(20000, 1000 * Math.pow(2, Math.min(VEC.fails, 5)));   // wait longer after each failure instead of hammering the server
       lastMsg = 'fast tiles: ' + msg;
       e.waiters.forEach(function (t) {
         if (tiles.get(t.key) !== t) return;
@@ -851,7 +859,7 @@
         const finish = function (u8) {
           try {
             const rec = vecToSpecs(decodeMVT(u8, ['transportation']), t.z, t.vx, t.vy);
-            VEC.ok++; VEC.fails = 0; VEC.lastOk = Date.now();
+            VEC.ok++; VEC.fails = 0; VEC.lastOk = Date.now(); VEC.pauseUntil = 0;
             cachePut('v' + k, rec);
             e.st = 'done'; e.rec = rec; e.t = Date.now();
             lastMsg = 'fast tiles OK (' + (rec.main.length + rec.local.length) + ' roads, ' + rec.rail.length + ' rails in a tile)';
@@ -891,7 +899,7 @@
         active++;
       });
       const p = playerPos();
-      for (let guard = 0; guard < 12 && active < 4; guard++) {
+      for (let guard = 0; guard < 12 && active < 4 && now >= VEC.pauseUntil; guard++) {
         let best = null, bestD = Infinity;
         const hold = roadsQueued();
         tiles.forEach(function (t, key) {
@@ -3302,7 +3310,7 @@
     let lastNightCheck = 0;
     function slowTick() {
       tick++;
-      if (!cfg.enabled) { if (cars.length) removeAllCars(); updateStatus(); return; }
+      if (!cfg.enabled) { if (cars.length || tiles.size) resetWorld(); updateStatus(); return; }   // switched off: unload the map data too
       const p = playerPos();
       const r = cfg.radiusKm * 1000;
 
@@ -3356,9 +3364,21 @@
       Object.keys(PK).forEach(function (k) { PK[k] = { pool: [], total: 0, tw: {} }; });
       poolDirty = true;
     }
+    // "Reset map data": forget every tile, the saved tile cache, the saved tile address and all server backoff, then start fresh
+    function resetMapData() {
+      resetWorld(); cacheClear();
+      try { localStorage.removeItem('gftraffic_tpl'); localStorage.removeItem('gftraffic_combo'); } catch (e) { /* ignore */ }
+      VEC.state = 'init'; VEC.tpl = null; VEC.fails = 0; VEC.ok = 0; VEC.empty = 0; VEC.lastOk = 0; VEC.downUntil = 0; VEC.probing = false; VEC.note = ''; VEC.pauseUntil = 0; VEC.t0 = Date.now();
+      Object.keys(comboBad).forEach(function (k) { delete comboBad[k]; });
+      maxInflight = 4; nextFetchAt = 0; swapSince = 0; combo = 0; cacheHits = 0;
+      JUMP.pos = null;
+      if (cfg.mode === 'auto') autoReset();
+      logEv('map data reset by you');
+      lastMsg = 'map data reset';
+    }
 
     // Settings panel
-    const VERSION_STR = '0.26.6';
+    const VERSION_STR = '0.26.7';
     let statusEl = null, statusSum = null, warnEl = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
     function updateStatus() {
       if (!statusEl || !statusSum) return;
@@ -3480,7 +3500,7 @@
       const master = mk('button', 'mdl-button mdl-js-button mdl-button--raised mdl-button--colored');
       master.style.width = '100%';
       const refreshMaster = function () { master.textContent = cfg.enabled ? 'WORLD ON' : 'WORLD OFF'; master.classList.toggle('lw-off', !cfg.enabled); };
-      master.onclick = function () { cfg.enabled = !cfg.enabled; saveCfg(); refreshMaster(); };
+      master.onclick = function () { cfg.enabled = !cfg.enabled; if (cfg.enabled && cfg.mode === 'auto') autoReset(); saveCfg(); refreshMaster(); };
       refreshMaster();
       panel.appendChild(master);
 
@@ -3601,6 +3621,11 @@
       msel.addEventListener('change', function () { cfg.source = msel.value; saveCfg(); });
       mr.appendChild(msel); sMap.appendChild(mr);
       hint(sMap, 'Fast map tiles load in a second or two. If they ever fail, the addon switches to Overpass by itself. Boats always use Overpass.');
+      const resetBtn = mk('div', 'lw-tab', 'Reset map data');
+      resetBtn.style.marginTop = '6px';
+      resetBtn.onclick = function () { resetMapData(); resetBtn.textContent = 'Reset. Reloading the map...'; setTimeout(function () { resetBtn.textContent = 'Reset map data'; }, 3000); };
+      sMap.appendChild(resetBtn);
+      hint(sMap, 'Stuck with missing roads or a map that will not load? This clears everything the addon saved about the map and starts again.');
 
       const sPerf = section('Performance', false);
       const drawnInp = slider(sPerf, 'Max drawn cars', 'maxDrawn', 100, 3000, 100, '');
