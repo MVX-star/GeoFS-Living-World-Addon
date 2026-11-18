@@ -7,7 +7,7 @@
 // @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
 // @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
 // @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
-// @version      0.26.9
+// @version      0.27.0
 // @description  (Beta) GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
 // @match        https://geo-fs.com/geofs.php*
@@ -3358,7 +3358,7 @@
     }
 
     // Settings panel
-    const VERSION_STR = '0.26.9';
+    const VERSION_STR = '0.26.6';
     let statusEl = null, statusSum = null, warnEl = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
     function updateStatus() {
       if (!statusEl || !statusSum) return;
