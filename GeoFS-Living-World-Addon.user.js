@@ -7,7 +7,7 @@
 // @supportURL   https://github.com/MVX-star/GeoFS-Living-World-Addon/issues
 // @updateURL    https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
 // @downloadURL  https://raw.githubusercontent.com/MVX-star/GeoFS-Living-World-Addon/main/GeoFS-Living-World-Addon.user.js
-// @version      0.27.0
+// @version      0.26.11
 // @description  (Beta) GeoFS Living World: AI traffic on real OpenStreetMap roads with night lighting, in a native GeoFS menu
 // @match        https://www.geo-fs.com/geofs.php*
 // @match        https://geo-fs.com/geofs.php*
@@ -172,6 +172,11 @@
     // Road data (Overpass tiles)
     // how long things took since you last jumped somewhere new (shown in Advanced, helps find what is slow)
     const JUMP = { pos: null, t0: Date.now(), tile: null, car: null, all: null, ground: null };
+    // Loading ring: after a start or a teleport only the tiles close to you are requested first (m = ring radius in metres).
+    // The ring grows once its tiles have finished, or after a few seconds if some are slow. When it covers your full
+    // radius, full becomes true and everything loads as before.
+    const RING = { m: 4000, full: false, t: Date.now() };
+    function ringLimit(kind, fullM) { return RING.full ? fullM : Math.min(fullM, RING.m * (REACH[kind] || 1)); }
     const tiles = new Map();      // key -> {key, layer, size, ix, iy, state, ways, retries, ...}
     const wayOwner = new Map();   // way id -> tile key
     const nodeIndex = new Map();  // node id -> [{way, i}]
@@ -254,8 +259,9 @@
     function updateTiles() {
       const p = playerPos();
       Object.keys(LAYERS).forEach(function (layer) {
-        const r = layerRadiusM(layer);
+        let r = layerRadiusM(layer);
         if (r < 0) return;
+        r = ringLimit(layerKindOf(layer), r);
         if (LAYERS[layer].vec) { if (VEC.tpl) vecEnumerate(layer, r, p); return; }
         const size = LAYERS[layer].size;
         const dLat = r / 111320;
@@ -3187,6 +3193,7 @@
     function layerKindOf(layer) { const base = LAYERS[layer] && LAYERS[layer].vec ? layer.slice(1) : layer; return base === 'water' ? 'boat' : base === 'rail' ? 'rail' : 'road'; }
     // true when every map tile near you (for this kind) has finished, successfully or not
     function tilesReady(p, rM, kind) {
+      if (!RING.full && rM > RING.m * (REACH[kind] || 1) + 1) return false;      // the ring has not grown that far yet
       let any = false, ok = true;
       tiles.forEach(function (t) {
         if (layerKindOf(t.layer) !== kind) return;
@@ -3300,11 +3307,39 @@
 
     let tick = 0;
     let lastNightCheck = 0;
+    let prevPos = null, lastTele = 0;
+    // A teleport (a big jump between two ticks): drop the old area at once and start the new one with a small loading ring
+    function teleportReset(km) {
+      resetWorld();
+      VEC.fails = 0; VEC.empty = 0; swapSince = 0;
+      RING.m = 4000; RING.full = false; RING.t = Date.now();
+      if (cfg.mode === 'auto') autoReset();
+      lastTele = Date.now();
+      logEv('jumped ' + Math.round(km) + ' km: old map cleared, loading the new area');
+    }
+    // the ring grows when its tiles are done, or after 12 s so one slow tile cannot hold it back
+    function ringStep(p) {
+      if (RING.full) return;
+      const now = Date.now();
+      if (!tilesReady(p, RING.m, 'road') && now - RING.t < 12000) return;
+      RING.m *= 1.6; RING.t = now;
+      if (RING.m >= cfg.radiusKm * 1000) RING.full = true;
+    }
     function slowTick() {
       tick++;
-      if (!cfg.enabled) { if (cars.length) removeAllCars(); updateStatus(); return; }
+      if (!cfg.enabled) {
+        if (cars.length || tiles.size) resetWorld();   // switched off: unload the map tiles too, so turning it back on starts clean
+        prevPos = null; RING.m = 4000; RING.full = false; RING.t = Date.now();
+        updateStatus(); return;
+      }
       const p = playerPos();
       const r = cfg.radiusKm * 1000;
+      if (prevPos && Date.now() - lastTele > 5000) {
+        const jump = distM(p.lat, p.lon, prevPos.lat, prevPos.lon);
+        if (jump > 30000) teleportReset(jump / 1000);
+      }
+      prevPos = { lat: p.lat, lon: p.lon };
+      ringStep(p);
 
       if (!JUMP.pos || distM(p.lat, p.lon, JUMP.pos.lat, JUMP.pos.lon) > 15000) { JUMP.pos = { lat: p.lat, lon: p.lon }; JUMP.t0 = Date.now(); JUMP.tile = JUMP.car = JUMP.all = JUMP.ground = null; }
       applySource();
@@ -3358,7 +3393,7 @@
     }
 
     // Settings panel
-    const VERSION_STR = '0.26.6';
+    const VERSION_STR = '0.26.11';
     let statusEl = null, statusSum = null, warnEl = null, autoTextEl = null, rareEl = null;   // short line (tiles) and the full advanced text
     function updateStatus() {
       if (!statusEl || !statusSum) return;
@@ -3370,7 +3405,7 @@
         else if (t.state === 'loading') loading++;
         else queued++;
       });
-      if (JUMP.all === null && JUMP.tile !== null && done > 0 && loading + queued === 0) JUMP.all = Date.now() - JUMP.t0;
+      if (JUMP.all === null && JUMP.tile !== null && RING.full && done > 0 && loading + queued === 0) JUMP.all = Date.now() - JUMP.t0;
       const sec = function (v) { return v === null ? 'waiting' : (v / 1000).toFixed(1) + 's'; };
       const jumpTxt = ' | since your last jump: first roads ' + sec(JUMP.tile) + ', first cars ' + sec(JUMP.car) + ', all map tiles ' + sec(JUMP.all) + ', ground measured ' + sec(JUMP.ground);
       if (autoTextEl && cfg.mode === 'auto') autoTextEl.textContent = autoText();
